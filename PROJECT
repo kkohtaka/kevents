@@ -1,0 +1,6 @@
+domain: kkohtaka.org
+layout:
+- go.kubebuilder.io/v3
+projectName: kevents
+repo: github.com/kkohtaka/kevents
+version: "3"
