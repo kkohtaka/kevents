@@ -31,7 +31,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	testv1 "github.com/kkohtaka/kevents/apis/test/v1"
 	"github.com/kkohtaka/kevents/controllers"
+	testcontrollers "github.com/kkohtaka/kevents/controllers/test"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -43,6 +45,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	utilruntime.Must(testv1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -81,6 +84,13 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Event")
+		os.Exit(1)
+	}
+	if err = (&testcontrollers.ParentReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Parent")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder
