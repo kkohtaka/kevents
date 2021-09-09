@@ -1,0 +1,5 @@
+apiVersion: test.kkohtaka.org/v1
+kind: Child
+metadata:
+  name: child-sample
+spec: {}

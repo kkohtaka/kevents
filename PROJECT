@@ -19,4 +19,13 @@ resources:
   kind: Parent
   path: github.com/kkohtaka/kevents/apis/test/v1
   version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: kkohtaka.org
+  group: test
+  kind: Child
+  path: github.com/kkohtaka/kevents/apis/test/v1
+  version: v1
 version: "3"

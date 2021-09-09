@@ -35,6 +35,32 @@ rules:
 - apiGroups:
   - test.kkohtaka.org
   resources:
+  - children
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - test.kkohtaka.org
+  resources:
+  - children/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - test.kkohtaka.org
+  resources:
+  - children/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - test.kkohtaka.org
+  resources:
   - parents
   verbs:
   - create
