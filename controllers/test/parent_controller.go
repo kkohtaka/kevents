@@ -20,13 +20,18 @@ import (
 	"context"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	testv1 "github.com/kkohtaka/kevents/apis/test/v1"
+)
+
+const (
+	finalizerName = "test.kkohtaka.org/finalizer"
 )
 
 // ParentReconciler reconciles a Parent object
@@ -49,14 +54,40 @@ type ParentReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.8.3/pkg/reconcile
 func (r *ParentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	logger := log.FromContext(ctx).WithValues("parent", req.NamespacedName)
 
 	var parent testv1.Parent
 	if err := r.Client.Get(ctx, req.NamespacedName, &parent); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		return ctrl.Result{Requeue: true}, fmt.Errorf("couldn't get Parent %s: %w", req.NamespacedName, err)
+		logger.Error(err, "unable to fetch Parent")
+		return ctrl.Result{}, err
+	}
+
+	if parent.ObjectMeta.DeletionTimestamp.IsZero() {
+		if !controllerutil.ContainsFinalizer(&parent, finalizerName) {
+			controllerutil.AddFinalizer(&parent, finalizerName)
+			if err := r.Update(ctx, &parent); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	} else {
+		if controllerutil.ContainsFinalizer(&parent, finalizerName) {
+			if err := r.deleteExternalResources(&parent); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			controllerutil.RemoveFinalizer(&parent, finalizerName)
+			if err := r.Update(ctx, &parent); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	if err := r.createExternalResources(&parent); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	parent.Status.Phase = testv1.ParentPhaseRunning
@@ -67,6 +98,14 @@ func (r *ParentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *ParentReconciler) createExternalResources(p *testv1.Parent) error {
+	return nil
+}
+
+func (r *ParentReconciler) deleteExternalResources(p *testv1.Parent) error {
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
