@@ -70,7 +70,7 @@ func (r *ParentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	} else {
 		if controllerutil.ContainsFinalizer(&parent, finalizerName) {
-			if err := r.deleteExternalResources(&parent); err != nil {
+			if err := r.deleteExternalResources(ctx, &parent); err != nil {
 				return ctrl.Result{}, err
 			}
 
@@ -82,7 +82,7 @@ func (r *ParentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.createExternalResources(&parent); err != nil {
+	if err := r.createExternalResources(ctx, &parent); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -96,11 +96,11 @@ func (r *ParentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return ctrl.Result{}, nil
 }
 
-func (r *ParentReconciler) createExternalResources(p *testv1.Parent) error {
+func (r *ParentReconciler) createExternalResources(ctx context.Context, p *testv1.Parent) error {
 	return nil
 }
 
-func (r *ParentReconciler) deleteExternalResources(p *testv1.Parent) error {
+func (r *ParentReconciler) deleteExternalResources(ctx context.Context, p *testv1.Parent) error {
 	return nil
 }
 
