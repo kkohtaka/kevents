@@ -20,10 +20,11 @@ import (
 	"context"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	testv1 "github.com/kkohtaka/kevents/apis/test/v1"
@@ -49,14 +50,40 @@ type ChildReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.8.3/pkg/reconcile
 func (r *ChildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	logger := log.FromContext(ctx).WithValues("child", req.NamespacedName)
 
 	var child testv1.Child
 	if err := r.Client.Get(ctx, req.NamespacedName, &child); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		return ctrl.Result{Requeue: true}, fmt.Errorf("couldn't get Child %s: %w", req.NamespacedName, err)
+		logger.Error(err, "unable to fetch Child")
+		return ctrl.Result{}, err
+	}
+
+	if child.ObjectMeta.DeletionTimestamp.IsZero() {
+		if !controllerutil.ContainsFinalizer(&child, finalizerName) {
+			controllerutil.AddFinalizer(&child, finalizerName)
+			if err := r.Update(ctx, &child); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	} else {
+		if controllerutil.ContainsFinalizer(&child, finalizerName) {
+			if err := r.deleteExternalResources(&child); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			controllerutil.RemoveFinalizer(&child, finalizerName)
+			if err := r.Update(ctx, &child); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	if err := r.createExternalResources(&child); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	child.Status.Phase = testv1.ChildPhaseRunning
@@ -67,6 +94,14 @@ func (r *ChildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *ChildReconciler) createExternalResources(p *testv1.Child) error {
+	return nil
+}
+
+func (r *ChildReconciler) deleteExternalResources(p *testv1.Child) error {
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

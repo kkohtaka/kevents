@@ -30,10 +30,6 @@ import (
 	testv1 "github.com/kkohtaka/kevents/apis/test/v1"
 )
 
-const (
-	finalizerName = "test.kkohtaka.org/finalizer"
-)
-
 // ParentReconciler reconciles a Parent object
 type ParentReconciler struct {
 	client.Client
