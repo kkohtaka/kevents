@@ -86,13 +86,10 @@ func (r *ChildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
-	child.Status.Phase = testv1.ChildPhaseRunning
-	if err := r.Client.Status().Update(
-		ctx, &child, &client.UpdateOptions{}); err != nil {
+	if err := r.updateStatus(ctx, &child); err != nil {
 		return ctrl.Result{Requeue: true},
-			fmt.Errorf("couldn't update status of Child %s: %w", req.NamespacedName, err)
+			fmt.Errorf("couldn't update status of child %s: %w", req.NamespacedName, err)
 	}
-
 	return ctrl.Result{}, nil
 }
 
@@ -101,6 +98,21 @@ func (r *ChildReconciler) createExternalResources(ctx context.Context, p *testv1
 }
 
 func (r *ChildReconciler) deleteExternalResources(ctx context.Context, p *testv1.Child) error {
+	return nil
+}
+
+func (r *ChildReconciler) updateStatus(ctx context.Context, c *testv1.Child) error {
+	if err := r.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: c.Name}, c); err != nil {
+		return fmt.Errorf("couldn't get a latest status of child %s/%s: %w", c.Namespace, c.Name, err)
+	}
+	if !c.DeletionTimestamp.IsZero() {
+		c.Status.Phase = testv1.ChildPhaseDeleting
+	} else {
+		c.Status.Phase = testv1.ChildPhaseRunning
+	}
+	if err := r.Client.Status().Update(ctx, c, &client.UpdateOptions{}); err != nil {
+		return fmt.Errorf("couldn't update status of child %s/%s: %w", c.Namespace, c.Name, err)
+	}
 	return nil
 }
 
