@@ -93,11 +93,11 @@ func (r *ChildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	return ctrl.Result{}, nil
 }
 
-func (r *ChildReconciler) createExternalResources(ctx context.Context, p *testv1.Child) error {
+func (r *ChildReconciler) createExternalResources(ctx context.Context, c *testv1.Child) error {
 	return nil
 }
 
-func (r *ChildReconciler) deleteExternalResources(ctx context.Context, p *testv1.Child) error {
+func (r *ChildReconciler) deleteExternalResources(ctx context.Context, c *testv1.Child) error {
 	return nil
 }
 
