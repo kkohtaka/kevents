@@ -33,6 +33,7 @@ const (
 
 // ParentSpec defines the desired state of Parent
 type ParentSpec struct {
+	NumChildren int32 `json:"numChildren,omitempty"`
 }
 
 // ParentStatus defines the observed state of Parent
@@ -44,6 +45,7 @@ type ParentStatus struct {
 //+kubebuilder:subresource:status
 
 // Parent is the Schema for the parents API
+// +kubebuilder:printcolumn:name="Children",type=integer,JSONPath=`.spec.numChildren`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 type Parent struct {

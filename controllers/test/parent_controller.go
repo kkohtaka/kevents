@@ -21,7 +21,10 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/selection"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -39,6 +42,8 @@ type ParentReconciler struct {
 //+kubebuilder:rbac:groups=test.kkohtaka.org,resources=parents,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=test.kkohtaka.org,resources=parents/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=test.kkohtaka.org,resources=parents/finalizers,verbs=update
+//+kubebuilder:rbac:groups=test.kkohtaka.org,resources=children,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=test.kkohtaka.org,resources=children/status,verbs=get
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -86,21 +91,120 @@ func (r *ParentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	parent.Status.Phase = testv1.ParentPhaseRunning
-	if err := r.Client.Status().Update(
-		ctx, &parent, &client.UpdateOptions{}); err != nil {
+	if err := r.updateStatus(ctx, &parent); err != nil {
 		return ctrl.Result{Requeue: true},
 			fmt.Errorf("couldn't update status of Parent %s: %w", req.NamespacedName, err)
 	}
-
 	return ctrl.Result{}, nil
 }
 
+func generateChildNamePrefix(p *testv1.Parent) string {
+	return p.Name + "-"
+}
+
+func generateChildLabels(p *testv1.Parent) map[string]string {
+	return map[string]string{
+		ownerLabelKey: p.Name,
+	}
+}
+
+func generateChildSpec(p *testv1.Parent) testv1.ChildSpec {
+	return testv1.ChildSpec{}
+}
+
+func generateChildSelector(p *testv1.Parent) (labels.Selector, error) {
+	req, err := labels.NewRequirement(ownerLabelKey, selection.Equals, []string{p.Name})
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create a requirement of label selection: %w", err)
+	}
+	return labels.NewSelector().Add(*req), nil
+}
+
 func (r *ParentReconciler) createExternalResources(ctx context.Context, p *testv1.Parent) error {
+	sel, err := generateChildSelector(p)
+	if err != nil {
+		return fmt.Errorf("couldn't generate a children selector: %w", err)
+	}
+	var children testv1.ChildList
+	if err := r.Client.List(ctx, &children, &client.ListOptions{LabelSelector: sel}); err != nil {
+		return fmt.Errorf("couldn't list children of parent %s/%s: %w", p.Namespace, p.Name, err)
+	}
+
+	if len(children.Items) > int(p.Spec.NumChildren) {
+		for diff := len(children.Items) - int(p.Spec.NumChildren); diff > 0; diff-- {
+			if err := r.Client.Delete(ctx, &children.Items[diff-1]); err != nil {
+				return fmt.Errorf("couldn't delete child %s/%s: %w",
+					children.Items[diff-1].Namespace,
+					children.Items[diff-1].Name,
+					err,
+				)
+			}
+		}
+	} else {
+		for diff := int(p.Spec.NumChildren) - len(children.Items); diff > 0; diff-- {
+			child := testv1.Child{
+				ObjectMeta: metav1.ObjectMeta{
+					GenerateName: generateChildNamePrefix(p),
+					Namespace:    p.Namespace,
+					Labels:       generateChildLabels(p),
+				},
+				Spec: generateChildSpec(p),
+			}
+			if err := controllerutil.SetControllerReference(p, &child, r.Scheme); err != nil {
+				return fmt.Errorf("couldn't set a controller reference on a child: %w", err)
+			}
+			if err := r.Client.Create(ctx, &child, &client.CreateOptions{}); err != nil {
+				return fmt.Errorf("couldn't create a chilld: %w", err)
+			}
+		}
+	}
 	return nil
 }
 
 func (r *ParentReconciler) deleteExternalResources(ctx context.Context, p *testv1.Parent) error {
+	sel, err := generateChildSelector(p)
+	if err != nil {
+		return fmt.Errorf("couldn't generate a children selector: %w", err)
+	}
+	if err := r.Client.DeleteAllOf(ctx, &testv1.Child{}, &client.DeleteAllOfOptions{ListOptions: client.ListOptions{
+		LabelSelector: sel,
+	}}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("couldn't delete children of parent %s/%s: %w", p.Namespace, p.Name, err)
+	}
+	return nil
+}
+
+func (r *ParentReconciler) updateStatus(ctx context.Context, p *testv1.Parent) error {
+	if err := r.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: p.Name}, p); err != nil {
+		return fmt.Errorf("couldn't get a latest status of parent %s/%s: %w", p.Namespace, p.Name, err)
+	}
+	if !p.DeletionTimestamp.IsZero() {
+		p.Status.Phase = testv1.ParentPhaseDeleting
+	} else {
+		sel, err := generateChildSelector(p)
+		if err != nil {
+			return fmt.Errorf("couldn't generate a children selector: %w", err)
+		}
+		var children testv1.ChildList
+		if err := r.Client.List(ctx, &children, &client.ListOptions{LabelSelector: sel}); err != nil {
+			return fmt.Errorf("couldn't list children of parent %s/%s: %w", p.Namespace, p.Name, err)
+		}
+
+		runningChildren := 0
+		for i := range children.Items {
+			if children.Items[i].Status.Phase == testv1.ChildPhaseRunning {
+				runningChildren++
+			}
+		}
+
+		p.Status.Phase = testv1.ParentPhaseRunning
+		if runningChildren != int(p.Spec.NumChildren) {
+			p.Status.Phase = testv1.ParentPhaseUpdating
+		}
+	}
+	if err := r.Client.Status().Update(ctx, p, &client.UpdateOptions{}); err != nil {
+		return fmt.Errorf("couldn't update status of parent %s/%s: %w", p.Namespace, p.Name, err)
+	}
 	return nil
 }
 
@@ -108,5 +212,6 @@ func (r *ParentReconciler) deleteExternalResources(ctx context.Context, p *testv
 func (r *ParentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&testv1.Parent{}).
+		Owns(&testv1.Child{}).
 		Complete(r)
 }

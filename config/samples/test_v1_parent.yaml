@@ -2,4 +2,5 @@ apiVersion: test.kkohtaka.org/v1
 kind: Parent
 metadata:
   name: parent-sample
-spec: {}
+spec:
+  numChildren: 5
