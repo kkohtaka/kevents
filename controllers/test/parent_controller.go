@@ -19,6 +19,8 @@ package test
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -58,7 +60,7 @@ func (r *ParentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	logger := log.FromContext(ctx).WithValues("parent", req.NamespacedName)
 
 	var parent testv1.Parent
-	if err := r.Client.Get(ctx, req.NamespacedName, &parent); err != nil {
+	if err := r.Get(ctx, req.NamespacedName, &parent); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
@@ -72,6 +74,7 @@ func (r *ParentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if err := r.Update(ctx, &parent); err != nil {
 				return ctrl.Result{}, err
 			}
+			return ctrl.Result{}, nil
 		}
 	} else {
 		if controllerutil.ContainsFinalizer(&parent, finalizerName) {
@@ -91,11 +94,7 @@ func (r *ParentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	if err := r.updateStatus(ctx, &parent); err != nil {
-		return ctrl.Result{Requeue: true},
-			fmt.Errorf("couldn't update status of Parent %s: %w", req.NamespacedName, err)
-	}
-	return ctrl.Result{}, nil
+	return r.updateStatus(ctx, &parent)
 }
 
 func generateChildNamePrefix(p *testv1.Parent) string {
@@ -120,19 +119,26 @@ func generateChildSelector(p *testv1.Parent) (labels.Selector, error) {
 	return labels.NewSelector().Add(*req), nil
 }
 
+func generateAnnotationsForChild() map[string]string {
+	duration := time.Second * time.Duration(rand.Intn(30))
+	return map[string]string{
+		updatingUntilAnnotationKey: time.Now().Add(duration).Format(time.RFC3339),
+	}
+}
+
 func (r *ParentReconciler) createExternalResources(ctx context.Context, p *testv1.Parent) error {
 	sel, err := generateChildSelector(p)
 	if err != nil {
 		return fmt.Errorf("couldn't generate a children selector: %w", err)
 	}
 	var children testv1.ChildList
-	if err := r.Client.List(ctx, &children, &client.ListOptions{LabelSelector: sel}); err != nil {
+	if err := r.List(ctx, &children, &client.ListOptions{LabelSelector: sel}); err != nil {
 		return fmt.Errorf("couldn't list children of parent %s/%s: %w", p.Namespace, p.Name, err)
 	}
 
 	if len(children.Items) > int(p.Spec.NumChildren) {
 		for diff := len(children.Items) - int(p.Spec.NumChildren); diff > 0; diff-- {
-			if err := r.Client.Delete(ctx, &children.Items[diff-1]); err != nil {
+			if err := r.Delete(ctx, &children.Items[diff-1]); err != nil {
 				return fmt.Errorf("couldn't delete child %s/%s: %w",
 					children.Items[diff-1].Namespace,
 					children.Items[diff-1].Name,
@@ -147,13 +153,14 @@ func (r *ParentReconciler) createExternalResources(ctx context.Context, p *testv
 					GenerateName: generateChildNamePrefix(p),
 					Namespace:    p.Namespace,
 					Labels:       generateChildLabels(p),
+					Annotations:  generateAnnotationsForChild(),
 				},
 				Spec: generateChildSpec(p),
 			}
 			if err := controllerutil.SetControllerReference(p, &child, r.Scheme); err != nil {
 				return fmt.Errorf("couldn't set a controller reference on a child: %w", err)
 			}
-			if err := r.Client.Create(ctx, &child, &client.CreateOptions{}); err != nil {
+			if err := r.Create(ctx, &child, &client.CreateOptions{}); err != nil {
 				return fmt.Errorf("couldn't create a chilld: %w", err)
 			}
 		}
@@ -166,7 +173,7 @@ func (r *ParentReconciler) deleteExternalResources(ctx context.Context, p *testv
 	if err != nil {
 		return fmt.Errorf("couldn't generate a children selector: %w", err)
 	}
-	if err := r.Client.DeleteAllOf(ctx, &testv1.Child{}, &client.DeleteAllOfOptions{ListOptions: client.ListOptions{
+	if err := r.DeleteAllOf(ctx, &testv1.Child{}, &client.DeleteAllOfOptions{ListOptions: client.ListOptions{
 		LabelSelector: sel,
 	}}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("couldn't delete children of parent %s/%s: %w", p.Namespace, p.Name, err)
@@ -174,20 +181,20 @@ func (r *ParentReconciler) deleteExternalResources(ctx context.Context, p *testv
 	return nil
 }
 
-func (r *ParentReconciler) updateStatus(ctx context.Context, p *testv1.Parent) error {
-	if err := r.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: p.Name}, p); err != nil {
-		return fmt.Errorf("couldn't get a latest status of parent %s/%s: %w", p.Namespace, p.Name, err)
-	}
+func (r *ParentReconciler) updateStatus(ctx context.Context, p *testv1.Parent) (ctrl.Result, error) {
+	patch := client.MergeFrom(p.DeepCopy())
 	if !p.DeletionTimestamp.IsZero() {
 		p.Status.Phase = testv1.ParentPhaseDeleting
 	} else {
 		sel, err := generateChildSelector(p)
 		if err != nil {
-			return fmt.Errorf("couldn't generate a children selector: %w", err)
+			return ctrl.Result{Requeue: true},
+				fmt.Errorf("couldn't generate a children selector: %w", err)
 		}
 		var children testv1.ChildList
-		if err := r.Client.List(ctx, &children, &client.ListOptions{LabelSelector: sel}); err != nil {
-			return fmt.Errorf("couldn't list children of parent %s/%s: %w", p.Namespace, p.Name, err)
+		if err := r.List(ctx, &children, &client.ListOptions{LabelSelector: sel}); err != nil {
+			return ctrl.Result{Requeue: true},
+				fmt.Errorf("couldn't list children of parent %s/%s: %w", p.Namespace, p.Name, err)
 		}
 
 		runningChildren := 0
@@ -202,10 +209,11 @@ func (r *ParentReconciler) updateStatus(ctx context.Context, p *testv1.Parent) e
 			p.Status.Phase = testv1.ParentPhaseUpdating
 		}
 	}
-	if err := r.Client.Status().Update(ctx, p, &client.UpdateOptions{}); err != nil {
-		return fmt.Errorf("couldn't update status of parent %s/%s: %w", p.Namespace, p.Name, err)
+
+	if err := r.Status().Patch(ctx, p, patch); err != nil {
+		return ctrl.Result{Requeue: true}, fmt.Errorf("couldn't update status of parent %s/%s: %w", p.Namespace, p.Name, err)
 	}
-	return nil
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

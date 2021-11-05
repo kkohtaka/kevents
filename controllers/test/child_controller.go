@@ -19,6 +19,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -67,6 +68,7 @@ func (r *ChildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			if err := r.Update(ctx, &child); err != nil {
 				return ctrl.Result{}, err
 			}
+			return ctrl.Result{}, nil
 		}
 	} else {
 		if controllerutil.ContainsFinalizer(&child, finalizerName) {
@@ -86,11 +88,7 @@ func (r *ChildReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
-	if err := r.updateStatus(ctx, &child); err != nil {
-		return ctrl.Result{Requeue: true},
-			fmt.Errorf("couldn't update status of child %s: %w", req.NamespacedName, err)
-	}
-	return ctrl.Result{}, nil
+	return r.updateStatus(ctx, &child)
 }
 
 func (r *ChildReconciler) createExternalResources(ctx context.Context, c *testv1.Child) error {
@@ -101,19 +99,40 @@ func (r *ChildReconciler) deleteExternalResources(ctx context.Context, c *testv1
 	return nil
 }
 
-func (r *ChildReconciler) updateStatus(ctx context.Context, c *testv1.Child) error {
-	if err := r.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: c.Name}, c); err != nil {
-		return fmt.Errorf("couldn't get a latest status of child %s/%s: %w", c.Namespace, c.Name, err)
-	}
+func (r *ChildReconciler) updateStatus(ctx context.Context, c *testv1.Child) (ctrl.Result, error) {
+	patch := client.MergeFrom(c.DeepCopy())
 	if !c.DeletionTimestamp.IsZero() {
 		c.Status.Phase = testv1.ChildPhaseDeleting
 	} else {
 		c.Status.Phase = testv1.ChildPhaseRunning
+
+		updatingUntilStr, ok := c.Annotations[updatingUntilAnnotationKey]
+		if ok {
+			updatingUntil, err := time.Parse(time.RFC3339, updatingUntilStr)
+			if err == nil {
+				if time.Now().Before(updatingUntil) {
+					c.Status.Phase = testv1.ChildPhaseUpdating
+				}
+			}
+		}
 	}
-	if err := r.Client.Status().Update(ctx, c, &client.UpdateOptions{}); err != nil {
-		return fmt.Errorf("couldn't update status of child %s/%s: %w", c.Namespace, c.Name, err)
+
+	if err := r.Status().Patch(ctx, c, patch); err != nil {
+		return ctrl.Result{Requeue: true},
+			fmt.Errorf("couldn't update status of child %s/%s: %w", c.Namespace, c.Name, err)
 	}
-	return nil
+	if c.Status.Phase == testv1.ChildPhaseUpdating {
+		updatingUntilStr, ok := c.Annotations[updatingUntilAnnotationKey]
+		if ok {
+			updatingUntil, err := time.Parse(time.RFC3339, updatingUntilStr)
+			if err == nil {
+				return ctrl.Result{
+					RequeueAfter: time.Until(updatingUntil),
+				}, nil
+			}
+		}
+	}
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
